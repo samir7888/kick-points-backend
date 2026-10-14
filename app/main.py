@@ -21,6 +21,7 @@ from app.api.v1.channels import router as channels_router
 from app.api.v1.me import router as me_router
 from app.api.v1.ops import router as ops_router
 from app.api.v1.payments import router as payments_router
+from app.api.v1.points import router as points_router
 from app.api.v1.predictions import router as predictions_router
 from app.api.v1.settings import router as settings_router
 
@@ -327,6 +328,7 @@ def create_app() -> FastAPI:
     app.include_router(me_router, prefix="/api/v1")
     app.include_router(ops_router, prefix="/api/v1")
     app.include_router(payments_router, prefix="/api/v1")
+    app.include_router(points_router, prefix="/api/v1")
     app.include_router(predictions_router, prefix="/api/v1")
     app.include_router(settings_router, prefix="/api/v1")
 

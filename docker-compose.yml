@@ -1,36 +1,11 @@
-﻿version: "3.8"
+﻿# Local development stack.
+#
+# Postgres and Redis are hosted services (Neon + Upstash) rather than local
+# containers, so this file only runs the application processes. The
+# DATABASE_URL and REDIS_URL values are read from .env via `env_file`, which
+# keeps the credentials out of this tracked file.
 
 services:
-  # PostgreSQL Database
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: kick_predictions
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d kick_predictions"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  # Redis Cache & Message Broker
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6380:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   # FastAPI Application
   api:
     build:
@@ -40,19 +15,12 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/kick_predictions
-      - REDIS_URL=redis://redis:6379/0
       - PROMETHEUS_MULTIPROC_DIR=/prometheus
     env_file:
       - .env
     volumes:
       - .:/app
       - prometheus_metrics:/prometheus
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
@@ -67,19 +35,12 @@ services:
       dockerfile: Dockerfile
       target: development
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/kick_predictions
-      - REDIS_URL=redis://redis:6379/0
       - PROMETHEUS_MULTIPROC_DIR=/prometheus
     env_file:
       - .env
     volumes:
       - .:/app
       - prometheus_metrics:/prometheus
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     command: arq app.workers.settings.WorkerSettings
 
   # Prediction Listener
@@ -89,22 +50,13 @@ services:
       dockerfile: Dockerfile
       target: development
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/kick_predictions
-      - REDIS_URL=redis://redis:6379/0
       - PROMETHEUS_MULTIPROC_DIR=/prometheus
     env_file:
       - .env
     volumes:
       - .:/app
       - prometheus_metrics:/prometheus
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     command: python -m app.workers.listener
 
 volumes:
-  postgres_data:
-  redis_data:
   prometheus_metrics:

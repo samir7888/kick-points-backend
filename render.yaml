@@ -1,0 +1,164 @@
+# Render Blueprint for the Kick Prediction Backend.
+#
+# Provisions four resources:
+#   kick-cache             Render Key Value (Redis-compatible): arq job queue + pub/sub
+#   kick-backend-api       FastAPI web service (public, runs Alembic migrations on deploy)
+#   kick-backend-worker    arq background worker (votes, settle, canary, snapshots)
+#   kick-backend-listener  Kick Pusher listener (must run exactly one instance)
+#
+# PostgreSQL is NOT provisioned here. Create it on Neon and set DATABASE_URL
+# yourself (see the notes on that variable below).
+#
+# All `sync: false` values are left blank on purpose. After the first deploy,
+# open the "kick-backend-shared" env var group (or each service) in the Render
+# Dashboard and fill them in, then redeploy.
+#
+# IMPORTANT: every Render resource below must share ONE region, and Neon should
+# live in the same region too. Change `singapore` if that is not your target.
+
+envVarGroups:
+  - name: kick-backend-shared
+    envVars:
+      - key: APP_ENV
+        value: prod
+
+      # ---- Secrets (set in the Render Dashboard) ----
+      # 32+ chars, not the dev placeholder.
+      - key: SECRET_KEY
+        sync: false
+      # Comma-separated Fernet key(s). Generate with:
+      # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      - key: TOKEN_ENCRYPTION_KEYS
+        sync: false
+      # Neon DIRECT (non-pooler) host, asyncpg driver, NO ?sslmode=... query
+      # string. The cache watcher uses LISTEN/NOTIFY and the listener uses a
+      # session-scoped advisory lock, neither of which works through Neon's
+      # PgBouncer transaction pooler.
+      # Example: postgresql+asyncpg://user:pass@ep-xxx.us-east-2.aws.neon.tech/neondb
+      - key: DATABASE_URL
+        sync: false
+
+      # ---- Public URLs (fill in after the first deploy reveals the hostname) ----
+      # e.g. https://kick-backend-api.onrender.com  (must be https)
+      - key: API_URL
+        sync: false
+      # The public frontend origin. Checkout redirects to <SITE_URL>/success and
+      # <SITE_URL>/failed, so both routes must exist.
+      - key: SITE_URL
+        sync: false
+      # Comma-separated, all https, e.g. https://kick.example.com
+      - key: CORS_ORIGINS
+        sync: false
+      # The registrable domain shared with the frontend (must NOT be localhost).
+      - key: COOKIE_DOMAIN
+        sync: false
+
+      # ---- Kick OAuth ----
+      - key: KICK_CLIENT_ID
+        sync: false
+      - key: KICK_CLIENT_SECRET
+        sync: false
+      # Space-separated. Must be non-empty and include user:read. Register the
+      # redirect URI <API_URL>/api/v1/auth/kick/callback in the Kick app.
+      - key: KICK_SCOPES
+        sync: false
+
+      # ---- Kick canary (required in production) ----
+      - key: CANARY_CHANNEL_SLUG
+        sync: false
+      - key: CANARY_ACCESS_TOKEN
+        sync: false
+
+      # ---- Dodo Payments ----
+      # Use `test` while you still hold test-mode API keys.
+      - key: DODO_ENV
+        value: live
+      - key: DODO_API_KEY
+        sync: false
+      # whsec_... from the live webhook endpoint <API_URL>/api/v1/webhooks/dodo
+      - key: DODO_WEBHOOK_SECRET
+        sync: false
+      - key: DODO_PREMIUM_PRODUCT_ID
+        sync: false
+
+      # ---- Admin access & manual (QR) payments ----
+      - key: ADMIN_KICK_USER_IDS
+        sync: false
+      - key: PAYMENTS_ADMIN_PASSWORD
+        sync: false
+
+services:
+  # Redis-compatible store for the arq queue, SSE pub/sub and caches.
+  - type: keyvalue
+    name: kick-cache
+    region: singapore
+    plan: starter
+    # Job queue backend: LRU eviction would silently drop queued jobs.
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+  # Public API. Also owns the Alembic migrations via the pre-deploy command.
+  - type: web
+    name: kick-backend-api
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    # Runs against DATABASE_URL before the new instance goes live.
+    preDeployCommand: alembic upgrade head
+    # QR payment proofs are written to disk; Render's filesystem is otherwise
+    # ephemeral, so they would vanish on every deploy without this volume.
+    disk:
+      name: kick-uploads
+      # Mounted under the Docker WORKDIR, as Render recommends for Docker
+      # services (see render.com/docs/disks).
+      mountPath: /app/uploads
+      sizeGB: 1
+    envVars:
+      - fromGroup: kick-backend-shared
+      - key: QR_PAYMENT_DIR
+        value: /app/uploads/qr-proofs
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: kick-cache
+          property: connectionString
+
+  # arq worker: vote, settle, expiry, recovery, canary and snapshot tasks.
+  - type: worker
+    name: kick-backend-worker
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: arq app.workers.settings.WorkerSettings
+    autoDeploy: true
+    envVars:
+      - fromGroup: kick-backend-shared
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: kick-cache
+          property: connectionString
+
+  # Kick Pusher listener. A Postgres advisory lock keeps it single-instance.
+  - type: worker
+    name: kick-backend-listener
+    runtime: docker
+    region: singapore
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python -m app.workers.listener
+    autoDeploy: true
+    envVars:
+      - fromGroup: kick-backend-shared
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: kick-cache
+          property: connectionString

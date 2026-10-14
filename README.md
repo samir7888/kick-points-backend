@@ -9,7 +9,8 @@ A FastAPI backend for a SaaS product that automatically participates in Kick.com
 - **Tiered plans**: Free (1 channel) and Premium ($1/month, 6 channels)
 - **Real-time WebSocket** prediction monitoring via Kick's Pusher API
 - **Dodo Payments** integration for billing
-- **Background workers** for voting, settling, and canary health checks
+- **Points-growth analytics** dashboard backed by 15-minute balance snapshots
+- **Background workers** for voting, settling, canary health checks, and balance snapshots
 - **Server-Sent Events** for real-time UI updates
 - **Admin controls** including global kill switch
 - **Production ready** with structured logging, metrics, and Docker deployment
@@ -219,6 +220,22 @@ curl -X POST http://localhost:8000/api/v1/admin/kill-switch \
 The kill switch is persisted in PostgreSQL and mirrored in Redis. Turning it off
 does not clear the independent Kick circuit breaker.
 
+### Points-growth analytics
+
+A worker task runs every 15 minutes and records each user's channel-points
+balance; the API aggregates the history:
+
+- `GET /api/v1/points/history?range=24h&channel_id=<optional>` returns per-channel
+  and combined growth series plus window totals (`current`, `start`, `growth`,
+  `growth_pct`), cached per user for 60 seconds. `range` is one of `1h`, `24h`,
+  `7d` or `30d`; sub-day windows are bucketed by the hour (`1h` by 5 minutes) and
+  day windows by day.
+- Balances are read live from Kick and require the user's kick.com site session
+  token; users without one are omitted from snapshots (their growth is empty).
+- Reading points is the only points operation Kick exposes publicly — there is no
+  endpoint to add or set points. The dashboard therefore reports earned growth; it
+  never writes balances.
+
 ### Monitoring
 
 - **Health**: `GET /healthz` (liveness)
@@ -284,6 +301,9 @@ MIT License - see LICENSE file for details.
 - The listener's Pusher topic authorization requirements and the legacy vote
   adapter's exact error classification still need an end-to-end verification.
 - The backend cannot prove point balances using the current legacy adapter.
+- Points-growth history is sampled every 15 minutes (and only for accounts with a
+  site session token), so it reflects readings over time rather than every balance
+  change Kick records internally.
 - Confirm the Dodo product can satisfy the $1/month requirement: the current
   Dodo guide reports a USD subscription minimum of $1.00.
 - Run the complete endpoint/provider test suite and production configuration

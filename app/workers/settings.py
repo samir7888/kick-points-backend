@@ -10,6 +10,7 @@ from app.workers.tasks import (
     canary_task,
     expiry_task,
     pending_vote_recovery_task,
+    points_snapshot_task,
     settle_task,
     vote_task,
     webhook_retry_task,
@@ -19,15 +20,10 @@ settings = get_settings()
 
 
 def _redis_settings() -> RedisSettings:
-    import urllib.parse
-
-    parsed = urllib.parse.urlparse(str(settings.redis_url))
-    return RedisSettings(
-        host=parsed.hostname or "localhost",
-        port=parsed.port or 6379,
-        database=int(parsed.path.lstrip("/") or 0),
-        password=parsed.password,
-    )
+    # from_dsn honours the full URL: redis:// and rediss:// (TLS), username,
+    # password, and the DB index. Render Key Value's internal URL
+    # (redis://red-xxxx:6379) and TLS providers (rediss://...) both work.
+    return RedisSettings.from_dsn(str(settings.redis_url))
 
 
 class WorkerSettings:
@@ -37,6 +33,7 @@ class WorkerSettings:
         expiry_task,
         pending_vote_recovery_task,
         canary_task,
+        points_snapshot_task,
         webhook_retry_task,
     ]
     redis_settings = _redis_settings()
@@ -47,6 +44,10 @@ class WorkerSettings:
         cron(expiry_task, hour=0, minute=0),
         cron(pending_vote_recovery_task, minute=set(range(60))),
         cron(canary_task, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
+        # Balance readings for the growth dashboard. Every 15 minutes so the
+        # "last hour" window has several points to draw. A dedicated timeout
+        # keeps a large channel fleet from being cut off by the default 120s.
+        cron(points_snapshot_task, minute={0, 15, 30, 45}, timeout=600),
     ]
 
     @staticmethod

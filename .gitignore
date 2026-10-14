@@ -58,9 +58,6 @@ logs/
 *.db
 *.sqlite3
 
-# Docker
-.dockerignore
-
 # OS
 .DS_Store
 .DS_Store?

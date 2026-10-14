@@ -5,6 +5,7 @@ from .audit import AuditLog
 from .billing import Subscription
 from .channel import Channel, PausedReason
 from .oauth import KickToken, OAuthState, TokenHealth
+from .points import PointsSnapshot
 from .prediction import Prediction, PredictionState, Vote, VoteStatus
 from .qr_payment import QrPayment
 from .session import Session
@@ -22,6 +23,7 @@ __all__ = [
     "OAuthState",
     "PausedReason",
     "PauseReason",
+    "PointsSnapshot",
     "Prediction",
     "PredictionState",
     "QrPayment",

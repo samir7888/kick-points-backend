@@ -29,9 +29,14 @@ COPY . .
 RUN uv pip install --system .
 EXPOSE 8000
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash app
-RUN chown -R app:app /app
+# Create the non-root user and the writable upload directory (the persistent
+# disk mounts here). Creating it in the image keeps ownership correct for the
+# app user when the disk is not attached.
+RUN useradd --create-home --shell /bin/bash app \
+    && mkdir -p /app/uploads/qr-proofs \
+    && chown -R app:app /app
 USER app
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Bind to Render's injected $PORT (falls back to 8000 for local runs). The
+# "exec" keeps uvicorn as PID 1 so SIGTERM triggers a clean shutdown.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

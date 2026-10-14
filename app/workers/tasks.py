@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.api.v1.ops import publish_sse
+from app.core.cache import invalidate_user
 from app.core.config import get_settings
 from app.core.errors import KickSchemaError
 from app.core.logging import get_logger
@@ -21,6 +22,7 @@ from app.db.models import (
     Channel,
     KickToken,
     PausedReason,
+    PointsSnapshot,
     Prediction,
     PredictionState,
     TokenHealth,
@@ -906,3 +908,86 @@ async def canary_task(ctx: dict) -> None:
                 {"paused": True, "reason": "canary_failures"},
             )
             log.error("circuit_breaker_opened")
+
+
+# ── Points snapshot task ──────────────────────────────────────────────────────
+
+
+async def points_snapshot_task(ctx: dict) -> None:
+    """Every 15 minutes: record each user's channel-points balance for growth analytics.
+
+    Only users who pasted a kick.com site session token can read a balance (the
+    OAuth token is rejected by Kick's points endpoint), so the rest are skipped.
+    Balances are fetched outside the DB session and every failure is isolated so
+    one dead channel never aborts the run.
+    """
+    gateway = ctx.get("gateway") or await _get_gateway()
+
+    async with get_session() as db:
+        result = await db.execute(
+            select(Channel, KickToken)
+            .join(KickToken, KickToken.user_id == Channel.user_id)
+            .where(
+                Channel.deleted_at.is_(None),
+                Channel.enabled == True,  # noqa: E712
+                Channel.paused_reason.is_(None),
+                KickToken.session_token_enc.isnot(None),
+            )
+            .order_by(Channel.user_id, Channel.id)
+        )
+        pairs = list(result.all())
+
+    tokens: dict[int, str] = {}
+    snapshots: list[tuple[int, int, str, int]] = []
+    for channel, kt in pairs:
+        token = tokens.get(channel.user_id)
+        if token is None:
+            if not kt.session_token_enc:
+                continue
+            try:
+                token = decrypt_token(kt.session_token_enc)
+            except Exception as exc:  # pragma: no cover - undecryptable token
+                log.warning(
+                    "points_snapshot_token_failed",
+                    user_id=channel.user_id,
+                    error_type=type(exc).__name__,
+                )
+                continue
+            tokens[channel.user_id] = token
+        try:
+            balance = await gateway.get_points_balance(channel.channel_slug, token)
+        except Exception as exc:
+            log.warning(
+                "points_snapshot_fetch_failed",
+                channel_id=channel.id,
+                error_type=type(exc).__name__,
+            )
+            continue
+        if isinstance(balance, int):
+            snapshots.append(
+                (channel.user_id, channel.id, channel.channel_slug, balance)
+            )
+
+    if not snapshots:
+        log.info("points_snapshot_done", recorded=0)
+        return
+
+    recorded_at = utcnow()
+    async with get_session() as db:
+        async with db.begin():
+            for user_id, channel_id, slug, balance in snapshots:
+                db.add(
+                    PointsSnapshot(
+                        user_id=user_id,
+                        channel_id=channel_id,
+                        channel_slug=slug,
+                        balance=balance,
+                        recorded_at=recorded_at,
+                    )
+                )
+
+    for unique_user_id in {item[0] for item in snapshots}:
+        await invalidate_user(unique_user_id)
+
+    log.info("points_snapshot_done", recorded=len(snapshots))
+

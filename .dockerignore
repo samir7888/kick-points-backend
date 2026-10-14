@@ -1,0 +1,24 @@
+# Keep the Docker build context small and free of local state and secrets.
+# NOTE: `legacy/` is intentionally NOT ignored -- the real Kick gateway imports it.
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+**/__pycache__
+*.py[cod]
+.venv
+venv
+env
+
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+*.log
+logs
+uploads
+prometheus

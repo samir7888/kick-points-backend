@@ -116,17 +116,23 @@ def prepare_test_database() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def reset_redis_client() -> Iterator[None]:
-    """Drop the process-wide Redis client between tests.
+    """Drop the process-wide Redis/DB clients between tests.
 
     pytest-asyncio runs each async test in its own event loop, and the shared
-    client is bound to the loop that created it. Resetting avoids reusing a
-    client across loops, which would otherwise make cache/readiness checks fail.
+    clients are bound to the loop that created them (the ``TestClient`` even
+    runs the app on its own loop). Resetting avoids reusing a client/engine
+    across loops, which would otherwise make cache/readiness checks and
+    background tasks fail with "Event loop is closed".
     """
     from app.db import session as db_session
 
     db_session._redis_client = None
+    db_session._engine = None
+    db_session._session_maker = None
     yield
     db_session._redis_client = None
+    db_session._engine = None
+    db_session._session_maker = None
 
 
 @pytest_asyncio.fixture

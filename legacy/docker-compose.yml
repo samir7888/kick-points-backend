@@ -1,0 +1,35 @@
+services:
+  miner:
+    build: .
+    container_name: kick-points-miner
+    restart: unless-stopped
+    volumes:
+      # Mount config.json for live configuration updates
+      - ./config.json:/app/config.json:ro
+      - ./logs:/app/logs
+    environment:
+      - TZ=UTC
+      - PORT=4000
+      # Option 1: Use CONFIG_JSON environment variable with your complete config
+      - CONFIG_JSON=${CONFIG_JSON:-}
+      # Option 2: Individual environment variables (override config.json values)
+      - KICK_AUTHORIZATION=${KICK_AUTHORIZATION:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-8738655929:AAGQX1ymdUZVJ7zf5m6RJGRA99slHdWQ4iI}
+      # Render external URL for keep-alive pings (/wake command)
+      - RENDER_EXTERNAL_URL=${RENDER_EXTERNAL_URL:-}
+      - SERVICE_URL=${SERVICE_URL:-}
+      # Interval in seconds between keep-alive pings (default 840 = 14 min)
+      - KEEPALIVE_INTERVAL=${KEEPALIVE_INTERVAL:-840}
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
