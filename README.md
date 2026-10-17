@@ -8,7 +8,7 @@ A FastAPI backend for a SaaS product that automatically participates in Kick.com
 - **Automatic prediction voting** using smart strategies from legacy code
 - **Tiered plans**: Free (1 channel) and Premium ($1/month, 6 channels)
 - **Real-time WebSocket** prediction monitoring via Kick's Pusher API
-- **Dodo Payments** integration for billing
+- **Manual QR / bank-transfer billing**: users scan a QR, upload a proof, and an admin confirms Premium
 - **Points-growth analytics** dashboard backed by 15-minute balance snapshots
 - **Background workers** for voting, settling, canary health checks, and balance snapshots
 - **Server-Sent Events** for real-time UI updates
@@ -29,8 +29,8 @@ cp .env.example .env
 ```
 
 Create a Fernet key and set `TOKEN_ENCRYPTION_KEYS` to it. Configure the Kick OAuth
-client, Dodo test-mode credentials/product ID, and the registered OAuth redirect URI.
-The Kick app must include the scopes required by the legacy voting integration.
+client and the registered OAuth redirect URI. The Kick app must include the scopes
+required by the legacy voting integration.
 
 ### 2. Start infrastructure and migrate
 
@@ -61,21 +61,21 @@ All environment variables are documented in `.env.example`. Key variables:
 - `DATABASE_URL`: PostgreSQL connection string
 - `REDIS_URL`: Redis connection string
 - `KICK_CLIENT_ID` / `KICK_CLIENT_SECRET`: Kick.com OAuth credentials
-- `DODO_API_KEY` / `DODO_WEBHOOK_SECRET`: Dodo Payments credentials
+- `PAYMENTS_ADMIN_PASSWORD`: password-protecting the `/payments` review page
 
 ### Important Notes
 
-- Kick OAuth PKCE S256, current-user lookup, and Dodo checkout/portal/webhook
-  signatures follow their current official documentation.
+- Kick OAuth PKCE S256 and current-user lookup follow their current official
+  documentation.
 - `KICK_SCOPES` remains deployment-specific: `user:read` is needed for current-user
   lookup. Kick's documented public scopes do not include prediction voting; the
   legacy adapter's prediction read/vote endpoints and Pusher subscription remain
   unverified and must be confirmed before production use.
 - The legacy code has no verified points-balance operation, so the adapter cannot
   apply the minimum-points fallback when the balance is unknown.
-- Dodo's current integration guide states a USD subscription minimum of $1.00.
-  The product requirement and display setting are $1; confirm a supported
-  currency/product configuration in the Dodo dashboard before production checkout.
+- Premium is sold as "$1/month" (display only). Payment is collected out of band
+  via the QR / bank-transfer flow; set `PAYMENTS_ADMIN_PASSWORD` and review proofs
+  on the `/payments` page.
 - Encryption keys support rotation (comma-separated, first encrypts, all decrypt).
   Never reuse the example key in production.
 
@@ -127,7 +127,7 @@ app/
 ├── services/           # Business logic layer
 ├── integrations/       # External service adapters
 │   ├── kick/           # Kick.com gateway + OAuth
-│   └── dodo/           # Dodo Payments client
+│   └── cloudinary/     # Optional proof-image hosting
 └── workers/            # Background tasks
 ```
 
@@ -182,26 +182,24 @@ and listener (`python -m app.workers.listener`) as separate processes. To aggreg
 their Prometheus metrics, set `PROMETHEUS_MULTIPROC_DIR` to the same writable shared
 volume for all three processes.
 
-### Dodo test-mode webhooks
+### QR / bank-transfer payments
 
-1. Start the API locally and expose port 8000 using a trusted HTTPS tunnel, for
-   example `cloudflared tunnel --url http://localhost:8000`.
-2. In the Dodo test-mode dashboard, register the tunnel URL ending in
-   `/api/v1/webhooks/dodo`, copy its webhook secret into `DODO_WEBHOOK_SECRET`,
-   and subscribe to the subscription lifecycle events used by the service
-   (`subscription.active`, `subscription.renewed`, `subscription.updated`,
-   `subscription.plan_changed`, `subscription.paused`, `subscription.unpaused`,
-   `subscription.on_hold`, `subscription.past_due`, `subscription.cancelled`,
-   `subscription.failed`, `subscription.expired`, `payment.succeeded`,
-   `payment.failed`).
-3. `SITE_URL` must be the public, HTTPS origin that hosts the frontend. The
-   checkout session sends every outcome to `<SITE_URL>/success` (the frontend
-   routes failed/expired statuses to `/failed`) and deliberate cancels to
-   `<SITE_URL>/failed`, so both routes must exist and be reachable.
-4. Create a checkout from the API and complete it in test mode. Entitlements are
-   granted only by a signature-verified webhook, never by the browser return URL.
-5. For a delivery retry, use the resend/retry action on that event's delivery in
-   the Dodo webhook dashboard. Reusing the same webhook ID is safe and idempotent.
+Premium is granted manually after an out-of-band transfer, with no hosted
+checkout or external provider:
+
+1. The user opens `/billing`, scans the configured QR, sends the $1 and uploads
+   a transfer screenshot (`POST /api/v1/billing/qr-payments`). The submission is
+   stored as `pending`; proofs go to Cloudinary when configured, otherwise to
+   `QR_PAYMENT_DIR`.
+2. An admin opens `/payments`, enters `PAYMENTS_ADMIN_PASSWORD`, and reviews the
+   proofs (`GET /api/v1/qr-payments`, images via `GET /api/v1/qr-payments/{id}/proof`).
+3. Confirming grants one month of Premium directly on the user row
+   (`POST /api/v1/qr-payments/{id}/confirm`); rejecting closes the submission
+   without granting anything (`POST /api/v1/qr-payments/{id}/reject`). The user's
+   open billing page updates over SSE (`billing_updated`).
+
+Entitlements are granted only by the admin confirm action, never by the browser.
+
 
 ## Operations
 
@@ -294,7 +292,7 @@ MIT License - see LICENSE file for details.
 - Run `make migrate` after every model/migration update before starting processes.
 - The committed test suite currently concentrates on schema, model, and health
   smoke tests. Add and run acceptance tests for OAuth state reuse, concurrent plan
-  limits, prediction/vote privacy and pagination, billing webhook event mapping,
+  limits, prediction/vote privacy and pagination, QR payment review flows,
   SSE delivery, and worker idempotency before production.
 - The CI lint and strict type-check commands must pass before calling the backend
   complete; both currently report existing issues that need to be resolved.
@@ -304,7 +302,8 @@ MIT License - see LICENSE file for details.
 - Points-growth history is sampled every 15 minutes (and only for accounts with a
   site session token), so it reflects readings over time rather than every balance
   change Kick records internally.
-- Confirm the Dodo product can satisfy the $1/month requirement: the current
-  Dodo guide reports a USD subscription minimum of $1.00.
+- Premium price is display-only (`premium_price_display`); confirm the QR target,
+  `PAYMENTS_ADMIN_PASSWORD`, and proof storage (Cloudinary or `QR_PAYMENT_DIR`)
+  before going live.
 - Run the complete endpoint/provider test suite and production configuration
   review before treating a deployment as production-ready.

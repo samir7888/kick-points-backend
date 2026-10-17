@@ -1,7 +1,5 @@
 """Application configuration using pydantic-settings."""
 
-import base64
-import binascii
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlsplit
@@ -72,11 +70,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    # Dodo Payments
-    dodo_env: str = Field(default="test", pattern=r"^(test|live)$")
-    dodo_api_key: str = Field(default="dev_dodo_api_key")
-    dodo_webhook_secret: str = Field(default="dev_dodo_webhook_secret")
-    dodo_premium_product_id: str = Field(default="dev_premium_product_id")
+    # Kick canary account (optional; used by the periodic canary task)
     canary_channel_slug: str = ""
     canary_access_token: str = ""
 
@@ -96,12 +90,28 @@ class Settings(BaseSettings):
         description="Hard cap for the payment-proof upload request body",
     )
 
+    # Cloudinary payment-proof storage. Set all three credentials to upload
+    # proofs to Cloudinary; leave them blank to keep writing to QR_PAYMENT_DIR.
+    cloudinary_cloud_name: str = Field(
+        default="",
+        description="Cloudinary cloud name that stores payment proofs",
+    )
+    cloudinary_api_key: str = Field(
+        default="", description="Cloudinary API key (server-side only)"
+    )
+    cloudinary_api_secret: str = Field(
+        default="", description="Cloudinary API secret (server-side only)"
+    )
+    cloudinary_folder: str = Field(
+        default="kick-payment-proofs",
+        description="Cloudinary folder that receives payment proofs",
+    )
+
     # Product rules
     premium_price_display: float = 0.99
     free_channel_limit: int = 1
     premium_channel_limit: int = 6
     min_vote_amount: int = 10
-    past_due_grace_days: int = 3
     min_seconds_before_close: int = 5
     vote_jitter_max_seconds: int = 2
 
@@ -123,22 +133,10 @@ class Settings(BaseSettings):
             raise ValueError("TOKEN_ENCRYPTION_KEYS must contain Fernet keys")
         for key in keys:
             Fernet(key.encode())
-        try:
-            base64.b64decode(
-                self.dodo_webhook_secret.removeprefix("whsec_"),
-                validate=True,
-            )
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError(
-                "DODO_WEBHOOK_SECRET must be a Standard Webhooks key"
-            ) from exc
         required_values = {
             "SECRET_KEY": self.secret_key,
             "KICK_CLIENT_ID": self.kick_client_id,
             "KICK_CLIENT_SECRET": self.kick_client_secret,
-            "DODO_API_KEY": self.dodo_api_key,
-            "DODO_WEBHOOK_SECRET": self.dodo_webhook_secret,
-            "DODO_PREMIUM_PRODUCT_ID": self.dodo_premium_product_id,
             "CANARY_ACCESS_TOKEN": self.canary_access_token,
             "KICK_SCOPES": self.kick_scopes,
         }
@@ -146,9 +144,6 @@ class Settings(BaseSettings):
             "dev-secret-key-32-chars-minimum-length",
             "dev_client_id",
             "dev_client_secret",
-            "dev_dodo_api_key",
-            "dev_dodo_webhook_secret",
-            "dev_premium_product_id",
         }
         missing = [
             name
@@ -171,6 +166,21 @@ class Settings(BaseSettings):
             not origin.startswith("https://") for origin in self.cors_origins_list
         ):
             raise ValueError("CORS_ORIGINS must contain explicit HTTPS origins")
+        return self
+
+    @model_validator(mode="after")
+    def validate_cloudinary_settings(self) -> "Settings":
+        """Cloudinary is optional, but the three credentials must travel together."""
+        configured = (
+            bool(self.cloudinary_cloud_name),
+            bool(self.cloudinary_api_key),
+            bool(self.cloudinary_api_secret),
+        )
+        if any(configured) and not all(configured):
+            raise ValueError(
+                "CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and "
+                "CLOUDINARY_API_SECRET must be set together"
+            )
         return self
 
     @property
@@ -200,6 +210,15 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         """Check if running in production."""
         return self.app_env == "prod"
+
+    @property
+    def cloudinary_enabled(self) -> bool:
+        """True when payment proofs should be stored in Cloudinary."""
+        return bool(
+            self.cloudinary_cloud_name
+            and self.cloudinary_api_key
+            and self.cloudinary_api_secret
+        )
 
     @property
     def is_dev(self) -> bool:

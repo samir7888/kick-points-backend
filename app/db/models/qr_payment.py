@@ -15,7 +15,8 @@ class QrPayment(BaseModel):
     Users without an international card pay by scanning the dashboard QR and
     uploading their transfer screenshot. An admin reviews the proof on the
     `/payments` page and either confirms it (which grants one month of
-    Premium) or rejects it.
+    Premium) or rejects it. Proofs are uploaded to Cloudinary when it is
+    configured, otherwise they stay on local disk.
     """
 
     PENDING = "pending"
@@ -44,6 +45,16 @@ class QrPayment(BaseModel):
     )
     proof_filename: Mapped[str] = mapped_column(
         String(255), nullable=False, comment="Stored screenshot of the transfer"
+    )
+    proof_url: Mapped[str | None] = mapped_column(
+        String(1024),
+        nullable=True,
+        comment="Cloudinary secure URL when hosted there (null for local files)",
+    )
+    proof_public_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Cloudinary public id, kept so the asset can be deleted later",
     )
     status: Mapped[str] = mapped_column(
         String(20),

@@ -33,8 +33,6 @@ def test_required_endpoints_are_documented():
         "/api/v1/auth/kick/callback",
         "/api/v1/auth/kick/login",
         "/api/v1/auth/logout",
-        "/api/v1/billing/checkout",
-        "/api/v1/billing/portal",
         "/api/v1/billing/status",
         "/api/v1/channels",
         "/api/v1/channels/amounts",
@@ -49,7 +47,6 @@ def test_required_endpoints_are_documented():
         "/api/v1/settings",
         "/api/v1/stream",
         "/api/v1/votes",
-        "/api/v1/webhooks/dodo",
         "/healthz",
         "/readyz",
     }

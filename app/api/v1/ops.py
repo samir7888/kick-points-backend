@@ -26,7 +26,7 @@ from app.core.metrics import (
     render_metrics,
 )
 from app.core.security import utcnow
-from app.db.models import User, WebhookEvent
+from app.db.models import User
 from app.db.session import get_db_session, get_redis
 from app.services.audit import record_audit
 from app.services.runtime_flags import is_kill_switch_enabled, set_kill_switch_enabled
@@ -239,13 +239,6 @@ async def admin_overview(
     queue_lag_seconds = (
         max(0.0, utcnow().timestamp() - queue_head[0][1] / 1000) if queue_head else 0.0
     )
-    unprocessed_webhooks = (
-        await db.execute(
-            select(func.count(WebhookEvent.id)).where(
-                WebhookEvent.processed_at.is_(None)
-            )
-        )
-    ).scalar_one()
 
     return {
         "users": user_count,
@@ -256,5 +249,4 @@ async def admin_overview(
         "canary_failures": int(await redis.get("canary:failures") or 0),
         "queue_depth": queue_depth,
         "queue_lag_seconds": queue_lag_seconds,
-        "unprocessed_webhooks": unprocessed_webhooks,
     }

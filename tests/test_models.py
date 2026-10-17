@@ -14,13 +14,11 @@ from app.db.models import (
     Prediction,
     PredictionState,
     Session,
-    Subscription,
     TokenHealth,
     User,
     UserSettings,
     Vote,
     VoteStatus,
-    WebhookEvent,
 )
 
 
@@ -368,53 +366,6 @@ class TestSessionModel:
         assert session.ip == "127.0.0.1"
 
 
-class TestBillingModels:
-    """Test billing and subscription models."""
-
-    async def test_subscription(self, db_session):
-        """Test Subscription creation."""
-        user = User(kick_user_id=12345, username="testuser")
-        db_session.add(user)
-        await db_session.flush()
-
-        current_period_end = datetime.utcnow() + timedelta(days=30)
-
-        subscription = Subscription(
-            user_id=user.id,
-            dodo_subscription_id="sub_123",
-            dodo_customer_id="cus_456",
-            status="active",
-            current_period_end=current_period_end,
-            cancel_at_period_end=False,
-        )
-
-        db_session.add(subscription)
-        await db_session.flush()
-
-        assert subscription.user_id == user.id
-        assert subscription.dodo_subscription_id == "sub_123"
-        assert subscription.dodo_customer_id == "cus_456"
-        assert subscription.status == "active"
-        assert subscription.current_period_end == current_period_end
-        assert subscription.cancel_at_period_end is False
-
-    async def test_webhook_event(self, db_session):
-        """Test WebhookEvent creation."""
-        webhook_event = WebhookEvent(
-            id="evt_123",
-            type="subscription.created",
-            payload={"subscription_id": "sub_123", "status": "active"},
-        )
-
-        db_session.add(webhook_event)
-        await db_session.flush()
-
-        assert webhook_event.id == "evt_123"
-        assert webhook_event.type == "subscription.created"
-        assert webhook_event.payload["subscription_id"] == "sub_123"
-        assert webhook_event.processed_at is None
-
-
 class TestUserSettings:
     """Test UserSettings model."""
 
@@ -449,8 +400,6 @@ async def test_database_tables_exist(db_session):
         OAuthState,
         KickToken,
         UserSettings,
-        Subscription,
-        WebhookEvent,
     ]
 
     for model in models_to_test:

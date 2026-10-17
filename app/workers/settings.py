@@ -13,7 +13,6 @@ from app.workers.tasks import (
     points_snapshot_task,
     settle_task,
     vote_task,
-    webhook_retry_task,
 )
 
 settings = get_settings()
@@ -34,7 +33,6 @@ class WorkerSettings:
         pending_vote_recovery_task,
         canary_task,
         points_snapshot_task,
-        webhook_retry_task,
     ]
     redis_settings = _redis_settings()
     max_jobs = 20

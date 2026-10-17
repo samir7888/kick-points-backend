@@ -1,4 +1,4 @@
-"""arq background tasks: vote, settle, expiry, canary, webhook_retry."""
+"""arq background tasks: vote, settle, expiry, canary."""
 
 from __future__ import annotations
 
@@ -671,35 +671,6 @@ async def _finish_vote(
                     .values(paused_reason=PausedReason.TOKEN)
                 )
     VOTE_OUTCOMES.labels(status.value).inc()
-
-
-async def webhook_retry_task(ctx: dict, event_id: str) -> None:
-    """Retry a stored Dodo webhook only when it has not been processed."""
-    from app.db.models import WebhookEvent
-    from app.services.billing import apply_webhook_event, find_user_for_webhook
-
-    try:
-        async with get_session() as db:
-            async with db.begin():
-                event = await db.get(WebhookEvent, event_id, with_for_update=True)
-                if event is None or event.processed_at is not None:
-                    return
-                data = event.payload.get("data")
-                if not isinstance(data, dict):
-                    raise ValueError("Stored webhook data is invalid")
-                user = await find_user_for_webhook(data, db)
-                if user is None:
-                    raise ValueError("Webhook customer could not be associated")
-                await apply_webhook_event(event.type, data, user, db)
-                event.processed_at = utcnow()
-                event.error = None
-    except Exception as exc:
-        async with get_session() as db:
-            async with db.begin():
-                event = await db.get(WebhookEvent, event_id)
-                if event is not None and event.processed_at is None:
-                    event.error = type(exc).__name__
-        raise
 
 
 async def _record_vote(

@@ -18,11 +18,9 @@ from app.db.models import (
     KickToken,
     PausedReason,
     Session,
-    Subscription,
     User,
 )
 from app.db.session import get_db_session
-from app.integrations.dodo.client import DodoClient
 from app.integrations.kick.oauth import revoke_token
 from app.services.audit import record_audit
 from app.services.plans import channel_limit, is_premium
@@ -162,17 +160,7 @@ async def delete_me(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict:
-    """Soft-delete user, revoke tokens, cancel Dodo subscription."""
-    subscriptions_result = await db.execute(
-        select(Subscription).where(
-            Subscription.user_id == user.id,
-            Subscription.status.in_(("active", "past_due", "on_hold")),
-        )
-    )
-    for subscription in subscriptions_result.scalars().all():
-        await DodoClient().cancel_subscription(subscription.dodo_subscription_id)
-        subscription.cancel_at_period_end = True
-
+    """Soft-delete user and revoke tokens."""
     token_result = await db.execute(
         select(KickToken).where(KickToken.user_id == user.id)
     )

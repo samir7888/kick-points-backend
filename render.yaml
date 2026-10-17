@@ -42,8 +42,8 @@ envVarGroups:
       # e.g. https://kick-backend-api.onrender.com  (must be https)
       - key: API_URL
         sync: false
-      # The public frontend origin. Checkout redirects to <SITE_URL>/success and
-      # <SITE_URL>/failed, so both routes must exist.
+      # The public frontend origin. Premium is granted manually after a scanned
+      # QR payment is reviewed, so this is only used for links and CORS.
       - key: SITE_URL
         sync: false
       # Comma-separated, all https, e.g. https://kick.example.com
@@ -69,22 +69,20 @@ envVarGroups:
       - key: CANARY_ACCESS_TOKEN
         sync: false
 
-      # ---- Dodo Payments ----
-      # Use `test` while you still hold test-mode API keys.
-      - key: DODO_ENV
-        value: live
-      - key: DODO_API_KEY
-        sync: false
-      # whsec_... from the live webhook endpoint <API_URL>/api/v1/webhooks/dodo
-      - key: DODO_WEBHOOK_SECRET
-        sync: false
-      - key: DODO_PREMIUM_PRODUCT_ID
-        sync: false
-
       # ---- Admin access & manual (QR) payments ----
       - key: ADMIN_KICK_USER_IDS
         sync: false
       - key: PAYMENTS_ADMIN_PASSWORD
+        sync: false
+
+      # ---- Cloudinary (manual payment proofs) ----
+      # Optional. Set all three to upload proofs to Cloudinary; leave them empty
+      # to keep writing proofs to the disk volume mounted at /app/uploads.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
         sync: false
 
 services:
@@ -109,8 +107,9 @@ services:
     autoDeploy: true
     # Runs against DATABASE_URL before the new instance goes live.
     preDeployCommand: alembic upgrade head
-    # QR payment proofs are written to disk; Render's filesystem is otherwise
-    # ephemeral, so they would vanish on every deploy without this volume.
+    # QR payment proofs are written to disk when Cloudinary is not configured;
+    # Render's filesystem is otherwise ephemeral, so they would vanish on every
+    # deploy without this volume. (Set the Cloudinary vars to avoid it.)
     disk:
       name: kick-uploads
       # Mounted under the Docker WORKDIR, as Render recommends for Docker

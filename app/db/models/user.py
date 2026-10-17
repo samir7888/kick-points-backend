@@ -91,12 +91,6 @@ class User(BaseModel):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    subscriptions: Mapped[list["Subscription"]] = relationship(
-        "Subscription",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
     audit_logs: Mapped[list["AuditLog"]] = relationship(
         "AuditLog",
         back_populates="user",

@@ -3,10 +3,11 @@
 Two personas:
 
 - **Users** (authenticated) scan the billing QR, pay, and upload a transfer
-  screenshot from `/billing`. The record starts as ``pending``.
+  screenshot from `/billing`. The record starts as ``pending``. Proofs are
+  uploaded to Cloudinary when it is configured, otherwise saved to local disk.
 - **Admins** review submissions on the password-protected `/payments` page and
-  either confirm (granting one month of Premium directly on the user row, no
-  Dodo subscription) or reject them.
+  either confirm (granting one month of Premium directly on the user row) or
+  reject them.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +31,7 @@ from app.core.logging import get_logger
 from app.core.security import utcnow
 from app.db.models import QrPayment, User
 from app.db.session import get_db_session
+from app.integrations.cloudinary import CloudinaryClient, CloudinaryError
 from app.services.audit import record_audit
 from app.services.plans import is_premium, reconcile_channels
 
@@ -55,7 +57,7 @@ async def _admin_password_dependency(
 
 
 def _serialize(payment: QrPayment) -> dict[str, Any]:
-    """Shape a QrPayment for API responses (proof served separately)."""
+    """Shape a QrPayment for API responses."""
     return {
         "id": payment.id,
         "user_id": payment.user_id,
@@ -64,6 +66,7 @@ def _serialize(payment: QrPayment) -> dict[str, Any]:
         "reference": payment.reference,
         "amount": float(payment.amount) if payment.amount is not None else None,
         "status": payment.status,
+        "proof_url": payment.proof_url,
         "created_at": payment.created_at.isoformat()
         if payment.created_at
         else None,
@@ -120,16 +123,38 @@ async def submit_qr_payment(
             details={"field": "proof"},
         )
 
-    upload_dir = Path(settings.qr_payment_dir)
-    try:
-        upload_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        log.error("qr_payment_upload_dir_failed", error_type=type(exc).__name__)
-        raise ValidationError("Could not save your proof. Please try again.") from exc
+    # Upload to Cloudinary when configured; otherwise keep the proof on disk.
+    proof_url: str | None = None
+    proof_public_id: str | None = None
+    if settings.cloudinary_enabled:
+        try:
+            uploaded = await CloudinaryClient(settings).upload_image(
+                content,
+                filename=proof.filename or f"proof{extension}",
+                content_type=proof.content_type or "application/octet-stream",
+            )
+        except CloudinaryError as exc:
+            log.error("qr_payment_upload_failed", error_type=type(exc).__name__)
+            raise ValidationError(
+                "Could not save your proof. Please try again.",
+                details={"field": "proof"},
+            ) from exc
+        stored_name = uploaded.public_id[:255]
+        proof_url = uploaded.url
+        proof_public_id = uploaded.public_id
+    else:
+        upload_dir = Path(settings.qr_payment_dir)
+        try:
+            upload_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            log.error("qr_payment_upload_dir_failed", error_type=type(exc).__name__)
+            raise ValidationError(
+                "Could not save your proof. Please try again."
+            ) from exc
 
-    stored_name = f"{uuid.uuid4().hex}{extension}"
-    target = upload_dir / stored_name
-    target.write_bytes(content)
+        stored_name = f"{uuid.uuid4().hex}{extension}"
+        target = upload_dir / stored_name
+        target.write_bytes(content)
 
     payment = QrPayment(
         user_id=user.id,
@@ -138,6 +163,8 @@ async def submit_qr_payment(
         reference=reference or None,
         amount=amount,
         proof_filename=stored_name,
+        proof_url=proof_url,
+        proof_public_id=proof_public_id,
         status=QrPayment.PENDING,
     )
     db.add(payment)
@@ -145,7 +172,11 @@ async def submit_qr_payment(
         db,
         "qr_payment_submitted",
         user_id=user.id,
-        detail={"proof": stored_name, "reference": reference or None},
+        detail={
+            "proof": stored_name,
+            "reference": reference or None,
+            "storage": "cloudinary" if proof_url else "disk",
+        },
         ip=request.client.host if request.client else None,
     )
     await db.commit()
@@ -187,14 +218,21 @@ async def list_qr_payments(
     "/qr-payments/{payment_id}/proof",
     summary="Serve a payment proof image (admin, password-gated)",
     dependencies=[Depends(_admin_password_dependency)],
+    response_model=None,
 )
 async def qr_payment_proof(
     payment_id: int,
     db: AsyncSession = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
-) -> FileResponse:
-    """Return the stored screenshot for a submission."""
+) -> FileResponse | RedirectResponse:
+    """Return the stored screenshot for a submission.
+
+    Cloudinary-hosted proofs redirect to their secure URL; proofs saved before
+    Cloudinary was configured are streamed from disk as before.
+    """
     payment = await _load_payment(payment_id, db)
+    if payment.proof_url:
+        return RedirectResponse(payment.proof_url, status_code=307)
     target = Path(settings.qr_payment_dir) / payment.proof_filename
     if not target.is_file():
         raise NotFoundError("Proof image is missing")
